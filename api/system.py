@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import io
+import os
+import tarfile
 from urllib.parse import quote
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
 from api.support import require_admin, require_identity, resolve_image_base_url
 from services.backup_service import BackupError, backup_service
-from services.config import config
+from services.config import CONFIG_FILE, DATA_DIR, config
 from services.image_service import delete_images, download_images_zip, get_image_download_response, get_thumbnail_response, list_images
 from services.image_tags_service import delete_tag, get_all_tags, set_tags
 from services.log_service import log_service
@@ -64,6 +67,26 @@ def create_router(app_version: str) -> APIRouter:
     @router.get("/ping")
     async def ping():
         return {"ok": True, "version": app_version}
+
+    @router.post("/api/bootstrap/restore")
+    async def restore_bootstrap_archive(
+        archive: UploadFile = File(...),
+        authorization: str | None = Header(default=None),
+        bootstrap_token: str | None = Header(default=None, alias="X-Bootstrap-Token"),
+    ):
+        require_admin(authorization)
+        expected_token = os.getenv("CHATGPT2API_BOOTSTRAP_RESTORE_TOKEN", "").strip()
+        if not expected_token:
+            raise HTTPException(status_code=404, detail={"error": "bootstrap restore is disabled"})
+        if not bootstrap_token or bootstrap_token != expected_token:
+            raise HTTPException(status_code=403, detail={"error": "bootstrap token is invalid"})
+
+        payload = await archive.read()
+        if len(payload) > 128 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail={"error": "bootstrap archive is too large"})
+
+        restored = await run_in_threadpool(_restore_bootstrap_payload, payload)
+        return {"ok": True, "restored": restored}
 
     @router.get("/api/settings")
     async def get_settings(authorization: str | None = Header(default=None)):
@@ -217,3 +240,32 @@ def create_router(app_version: str) -> APIRouter:
         return {"ok": True, "removed_from": count}
 
     return router
+
+
+def _restore_bootstrap_payload(payload: bytes) -> dict[str, int]:
+    restored_files = 0
+    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+        for member in archive.getmembers():
+            if member.isdir():
+                continue
+            if not member.isfile():
+                continue
+            clean_name = member.name.strip().lstrip("/")
+            if not clean_name or ".." in clean_name.split("/"):
+                continue
+            if clean_name == "config.json":
+                target = CONFIG_FILE
+            elif clean_name.startswith("data/"):
+                relative = clean_name.removeprefix("data/").strip("/")
+                if not relative:
+                    continue
+                target = DATA_DIR / relative
+            else:
+                continue
+            source = archive.extractfile(member)
+            if source is None:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read())
+            restored_files += 1
+    return {"files": restored_files}
