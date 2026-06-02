@@ -30,6 +30,8 @@ services:
         value: low
       - key: CHATGPT2API_AUTH_KEY
         sync: false
+      - key: CHATGPT2API_BOOTSTRAP_RESTORE_TOKEN
+        sync: false
 
   - type: cron
     name: onlybas-chatgpt2api-keepalive
