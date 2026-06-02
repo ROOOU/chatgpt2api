@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import re
 import time
@@ -38,6 +39,13 @@ DEFAULT_CLIENT_VERSION = "prod-be885abbfcfe7b1f511e88b3003d9ee44757fbad"
 DEFAULT_CLIENT_BUILD_NUMBER = "5955942"
 DEFAULT_POW_SCRIPT = "https://chatgpt.com/backend-api/sentinel/sdk.js"
 CODEX_IMAGE_MODEL = "codex-gpt-image-2"
+DEFAULT_IMAGE_MODEL_SLUG = os.getenv("CHATGPT2API_IMAGE_MODEL_SLUG", "gpt-5-5-thinking").strip() or "gpt-5-5-thinking"
+DEFAULT_IMAGE_THINKING_EFFORT = os.getenv("CHATGPT2API_IMAGE_THINKING_EFFORT", "extended").strip()
+IMAGE_QUALITY_THINKING_EFFORT = {
+    "low": "",
+    "medium": "standard",
+    "high": "extended",
+}
 
 
 class OpenAIBackendAPI:
@@ -398,10 +406,21 @@ class OpenAIBackendAPI:
         if not model:
             return "auto"
         if model == "gpt-image-2":
-            return "gpt-5-3"
+            return DEFAULT_IMAGE_MODEL_SLUG
         if model == CODEX_IMAGE_MODEL:
             return model
         return "auto"
+
+    def _image_thinking_effort(self, model_slug: str, quality: str | None = None) -> str:
+        """图片链路使用 ChatGPT Web 的可配置思考档位。"""
+        if not str(model_slug or "").strip().endswith("-thinking"):
+            return ""
+        quality_key = str(quality or "").strip().lower()
+        if quality_key in IMAGE_QUALITY_THINKING_EFFORT:
+            return IMAGE_QUALITY_THINKING_EFFORT[quality_key]
+        if DEFAULT_IMAGE_THINKING_EFFORT in {"standard", "extended"}:
+            return DEFAULT_IMAGE_THINKING_EFFORT
+        return ""
 
     def _image_headers(self, path: str, requirements: ChatRequirements, conduit_token: str = "", accept: str = "*/*") -> \
             Dict[str, str]:
@@ -419,14 +438,22 @@ class OpenAIBackendAPI:
             headers["X-Oai-Turn-Trace-Id"] = new_uuid()
         return self._headers(path, headers)
 
-    def _prepare_image_conversation(self, prompt: str, requirements: ChatRequirements, model: str) -> str:
+    def _prepare_image_conversation(
+            self,
+            prompt: str,
+            requirements: ChatRequirements,
+            model: str,
+            quality: str | None = None,
+    ) -> str:
         """为图片生成准备 conduit token。"""
         path = "/backend-api/f/conversation/prepare"
+        model_slug = self._image_model_slug(model)
+        thinking_effort = self._image_thinking_effort(model_slug, quality)
         payload = {
             "action": "next",
             "fork_from_shared_post": False,
             "parent_message_id": new_uuid(),
-            "model": self._image_model_slug(model),
+            "model": model_slug,
             "client_prepare_state": "success",
             "timezone_offset_min": -480,
             "timezone": "Asia/Shanghai",
@@ -441,6 +468,8 @@ class OpenAIBackendAPI:
             "supported_encodings": ["v1"],
             "client_contextual_info": {"app_name": "chatgpt.com"},
         }
+        if thinking_effort:
+            payload["thinking_effort"] = thinking_effort
         response = self.session.post(
             self.base_url + path,
             headers=self._image_headers(path, requirements),
@@ -525,9 +554,18 @@ class OpenAIBackendAPI:
             "height": height,
         }
 
-    def _start_image_generation(self, prompt: str, requirements: ChatRequirements, conduit_token: str, model: str,
-                                references: Optional[list[Dict[str, Any]]] = None) -> requests.Response:
+    def _start_image_generation(
+            self,
+            prompt: str,
+            requirements: ChatRequirements,
+            conduit_token: str,
+            model: str,
+            references: Optional[list[Dict[str, Any]]] = None,
+            quality: str | None = None,
+    ) -> requests.Response:
         """启动图片生成或编辑的 SSE 请求。"""
+        model_slug = self._image_model_slug(model)
+        thinking_effort = self._image_thinking_effort(model_slug, quality)
         references = references or []
         parts = [{
             "content_type": "image_asset_pointer",
@@ -565,12 +603,13 @@ class OpenAIBackendAPI:
                 "metadata": metadata,
             }],
             "parent_message_id": new_uuid(),
-            "model": self._image_model_slug(model),
+            "model": model_slug,
             "client_prepare_state": "sent",
             "timezone_offset_min": -480,
             "timezone": "Asia/Shanghai",
             "conversation_mode": {"kind": "primary_assistant"},
             "enable_message_followups": True,
+            "force_use_sse": True,
             "system_hints": ["picture_v2"],
             "supports_buffering": True,
             "supported_encodings": ["v1"],
@@ -587,6 +626,8 @@ class OpenAIBackendAPI:
             "paragen_cot_summary_display_override": "allow",
             "force_parallel_switch": "auto",
         }
+        if thinking_effort:
+            payload["thinking_effort"] = thinking_effort
         path = "/backend-api/f/conversation"
         response = self.session.post(
             self.base_url + path,
@@ -597,6 +638,256 @@ class OpenAIBackendAPI:
         )
         ensure_ok(response, path)
         return response
+
+    def _resume_picture_conversation(
+            self,
+            conversation_id: str,
+            topic_id: str,
+            resume_token: str,
+            depth: int = 0,
+    ) -> Iterator[str]:
+        """接续 ChatGPT Web 图片链路的 stream handoff SSE。"""
+        path = "/backend-api/f/conversation/resume"
+        response = self.session.post(
+            self.base_url + path,
+            headers=self._headers(path, {
+                "Accept": "text/event-stream",
+                "Content-Type": "application/json",
+                "X-Conduit-Token": resume_token,
+            }),
+            json={"conversation_id": conversation_id, "topic_id": topic_id},
+            timeout=300,
+            stream=True,
+        )
+        ensure_ok(response, path)
+        yield from self._iter_picture_payloads(response, depth=depth)
+
+    @staticmethod
+    def _decode_ws_encoded_item(encoded_item: str) -> list[str]:
+        """把 WebSocket topic 里的 encoded SSE item 解成标准 data payload。"""
+        payloads: list[str] = []
+        data_lines: list[str] = []
+        for raw_line in str(encoded_item or "").replace("\r\n", "\n").split("\n") + [""]:
+            if raw_line == "":
+                if data_lines:
+                    payload = "\n".join(data_lines).strip()
+                    if payload and payload != "[DONE]":
+                        payloads.append(payload)
+                data_lines = []
+                continue
+            if raw_line.startswith(":"):
+                continue
+            if ":" in raw_line:
+                field, value = raw_line.split(":", 1)
+                if value.startswith(" "):
+                    value = value[1:]
+            else:
+                field, value = raw_line, ""
+            if field == "data":
+                data_lines.append(value)
+        return payloads
+
+    @staticmethod
+    def _payload_has_tool_image(payload: str) -> bool:
+        try:
+            event = json.loads(payload)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(event, dict):
+            return False
+        value = event.get("v")
+        message = event.get("message") or (value.get("message") if isinstance(value, dict) else None)
+        if not isinstance(message, dict):
+            return False
+        if (message.get("author") or {}).get("role") != "tool":
+            return False
+        content = message.get("content") or {}
+        if content.get("content_type") != "multimodal_text":
+            return False
+        return "sediment://" in json.dumps(content) or "file-service://" in json.dumps(content)
+
+    def _picture_ws_url(self) -> str:
+        path = "/backend-api/celsius/ws/user"
+        response = self.session.get(
+            self.base_url + path,
+            headers=self._headers(path, {"Accept": "application/json"}),
+            timeout=20,
+        )
+        ensure_ok(response, path)
+        return str(response.json().get("websocket_url") or "")
+
+    def _iter_picture_ws_message_payloads(
+            self,
+            item: Dict[str, Any],
+            topic_id: str,
+            conversation_id: str,
+    ) -> Iterator[str]:
+        if item.get("type") != "message" or item.get("topic_id") != topic_id:
+            return
+        payload = item.get("payload") or {}
+        if not isinstance(payload, dict) or payload.get("type") != "conversation-turn-stream":
+            return
+        inner = payload.get("payload") or {}
+        if not isinstance(inner, dict) or inner.get("type") != "stream-item":
+            return
+        for decoded in self._decode_ws_encoded_item(str(inner.get("encoded_item") or "")):
+            yield decoded
+
+    def _iter_picture_ws_payloads(self, topic_id: str, conversation_id: str) -> Iterator[str]:
+        """读取新版 ChatGPT 图片链路 WebSocket topic，直接捕获图片附件事件。"""
+        if not topic_id:
+            return
+        ws = None
+        timeout_secs = max(float(config.image_poll_timeout_secs), 60.0)
+        deadline = time.time() + timeout_secs
+        saw_image = False
+
+        def emit_conversation_updates(data: Dict[str, Any]) -> Iterator[str]:
+            payload = data.get("payload") or {}
+            if not isinstance(payload, dict) or payload.get("update_type") != "add-messages":
+                return
+            update_content = payload.get("update_content") or {}
+            messages = update_content.get("messages") if isinstance(update_content, dict) else None
+            if not isinstance(messages, list):
+                return
+            event_conversation_id = str(payload.get("conversation_id") or conversation_id)
+            for message in messages:
+                if isinstance(message, dict):
+                    yield json.dumps({
+                        "type": "conversation_update_message",
+                        "conversation_id": event_conversation_id,
+                        "message": message,
+                    }, ensure_ascii=False)
+
+        try:
+            ws_url = self._picture_ws_url()
+            if not ws_url:
+                return
+            ws = self.session.ws_connect(
+                ws_url,
+                headers={
+                    "User-Agent": self.user_agent,
+                    "Origin": self.base_url,
+                    "Referer": self.base_url + "/",
+                },
+                timeout=30,
+            )
+            ws.send(json.dumps([{
+                "id": 1,
+                "command": {"type": "connect", "presence": {"type": "presence", "state": "foreground"}},
+            }]), requests.CurlWsFlag.TEXT)
+            ws.send(json.dumps([{
+                "id": 2,
+                "command": {"type": "subscribe", "topic_id": topic_id, "offset": "0"},
+            }]), requests.CurlWsFlag.TEXT)
+
+            while time.time() < deadline:
+                try:
+                    message, _ = ws.recv()
+                except requests.WebSocketTimeout:
+                    continue
+                except (requests.WebSocketClosed, requests.WebSocketError):
+                    break
+                text = message.decode("utf-8", "replace") if isinstance(message, (bytes, bytearray)) else str(message)
+                try:
+                    data = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                items = data if isinstance(data, list) else [data]
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    if isinstance(item.get("reply"), dict):
+                        catchups = item["reply"].get("catchups")
+                        if isinstance(catchups, list):
+                            for catchup in catchups:
+                                if not isinstance(catchup, dict):
+                                    continue
+                                for payload in self._iter_picture_ws_message_payloads(catchup, topic_id, conversation_id):
+                                    yield payload
+                                    if self._payload_has_tool_image(payload):
+                                        saw_image = True
+                                        return
+                    if item.get("type") == "message":
+                        for payload in self._iter_picture_ws_message_payloads(item, topic_id, conversation_id):
+                            yield payload
+                            if self._payload_has_tool_image(payload):
+                                saw_image = True
+                                return
+                    elif item.get("type") == "conversation-update":
+                        for payload in emit_conversation_updates(item):
+                            yield payload
+                            if self._payload_has_tool_image(payload):
+                                saw_image = True
+                                return
+                if saw_image:
+                    return
+        except Exception as exc:
+            logger.warning({
+                "event": "picture_ws_topic_failed",
+                "conversation_id": conversation_id,
+                "topic_id": topic_id,
+                "error": repr(exc),
+            })
+        finally:
+            if ws is not None:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+
+    def _iter_picture_payloads(self, response: requests.Response, depth: int = 0) -> Iterator[str]:
+        """读取图片 SSE；遇到新版 WS handoff 时交给后续 conversation 轮询解析。"""
+        resume_token = ""
+        conversation_id = ""
+        try:
+            for payload in iter_sse_payloads(response):
+                yield payload
+                if payload == "[DONE]":
+                    return
+                try:
+                    event = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                if event.get("type") == "resume_conversation_token":
+                    resume_token = str(event.get("token") or resume_token)
+                    conversation_id = str(event.get("conversation_id") or conversation_id)
+                    continue
+                if event.get("type") != "stream_handoff":
+                    continue
+                conversation_id = str(event.get("conversation_id") or conversation_id)
+                resume_topic_id = ""
+                ws_topic_id = ""
+                options = event.get("options") if isinstance(event.get("options"), list) else []
+                for option in options:
+                    if isinstance(option, dict) and option.get("type") == "resume_sse_endpoint":
+                        resume_topic_id = str(option.get("topic_id") or "")
+                    if isinstance(option, dict) and option.get("type") == "subscribe_ws_topic":
+                        ws_topic_id = str(option.get("topic_id") or "")
+                if ws_topic_id:
+                    logger.info({
+                        "event": "picture_stream_handoff_poll",
+                        "conversation_id": conversation_id,
+                        "topic_id": ws_topic_id,
+                    })
+                    yield from self._iter_picture_ws_payloads(ws_topic_id, conversation_id)
+                    return
+                if not resume_token or not conversation_id or not resume_topic_id:
+                    continue
+                if depth >= 3:
+                    logger.warning({
+                        "event": "picture_stream_handoff_depth_exceeded",
+                        "conversation_id": conversation_id,
+                        "topic_id": resume_topic_id,
+                        "depth": depth,
+                    })
+                    return
+                yield from self._resume_picture_conversation(conversation_id, resume_topic_id, resume_token, depth + 1)
+                return
+        finally:
+            response.close()
 
     def _get_conversation(self, conversation_id: str) -> Dict[str, Any]:
         """获取完整 conversation 详情。"""
@@ -619,8 +910,6 @@ class OpenAIBackendAPI:
             content = message.get("content") or {}
             if author.get("role") != "tool":
                 continue
-            if metadata.get("async_task_type") != "image_gen":
-                continue
             if content.get("content_type") != "multimodal_text":
                 continue
             file_ids, sediment_ids = [], []
@@ -633,6 +922,8 @@ class OpenAIBackendAPI:
                 for hit in sed_pat.findall(text):
                     if hit not in sediment_ids:
                         sediment_ids.append(hit)
+            if not file_ids and not sediment_ids:
+                continue
             records.append(
                 {"message_id": message_id, "create_time": message.get("create_time") or 0, "file_ids": file_ids,
                  "sediment_ids": sediment_ids})
@@ -645,7 +936,20 @@ class OpenAIBackendAPI:
         logger.info({"event": "image_poll_start", "conversation_id": conversation_id, "timeout_secs": timeout_secs})
         while time.time() - start < timeout_secs:
             attempt += 1
-            conversation = self._get_conversation(conversation_id)
+            try:
+                conversation = self._get_conversation(conversation_id)
+            except RuntimeError as exc:
+                error_text = str(exc)
+                if "conversation_inaccessible" in error_text or "你无权访问此对话" in error_text:
+                    logger.warning({
+                        "event": "image_poll_conversation_inaccessible",
+                        "conversation_id": conversation_id,
+                        "attempt": attempt,
+                        "elapsed_secs": round(time.time() - start, 1),
+                    })
+                    time.sleep(4)
+                    continue
+                raise
             file_ids, sediment_ids = [], []
             for record in self._extract_image_tool_records(conversation):
                 for file_id in record["file_ids"]:
@@ -792,10 +1096,11 @@ class OpenAIBackendAPI:
             prompt: str = "",
             images: Optional[list[str]] = None,
             system_hints: Optional[list[str]] = None,
+            image_quality: str | None = None,
     ) -> Iterator[str]:
         system_hints = system_hints or []
         if "picture_v2" in system_hints:
-            yield from self._stream_picture_conversation(prompt, model, images or [])
+            yield from self._stream_picture_conversation(prompt, model, images or [], image_quality)
             return
 
         normalized = messages or [{"role": "user", "content": prompt}]
@@ -821,18 +1126,16 @@ class OpenAIBackendAPI:
             prompt: str,
             model: str,
             images: list[str],
+            quality: str | None = None,
     ) -> Iterator[str]:
         if not self.access_token:
             raise RuntimeError("access_token is required for image endpoints")
         references = [self._upload_image(image, f"image_{idx}.png") for idx, image in enumerate(images, start=1)]
         self._bootstrap()
         requirements = self._get_chat_requirements()
-        conduit_token = self._prepare_image_conversation(prompt, requirements, model)
-        response = self._start_image_generation(prompt, requirements, conduit_token, model, references)
-        try:
-            yield from iter_sse_payloads(response)
-        finally:
-            response.close()
+        conduit_token = self._prepare_image_conversation(prompt, requirements, model, quality)
+        response = self._start_image_generation(prompt, requirements, conduit_token, model, references, quality)
+        yield from self._iter_picture_payloads(response)
 
     def _bootstrap(self) -> None:
         """预热首页，并提取 PoW 相关脚本引用。"""

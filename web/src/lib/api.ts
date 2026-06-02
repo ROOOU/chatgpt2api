@@ -3,6 +3,7 @@ import { httpRequest, request } from "@/lib/request";
 export type AccountType = string;
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
 export type ImageModel = "gpt-image-2" | "codex-gpt-image-2";
+export type ImageQuality = "low" | "medium" | "high";
 export type AuthRole = "admin" | "user";
 
 export type Account = {
@@ -172,6 +173,7 @@ export type ImageTask = {
   mode: "generate" | "edit";
   model?: ImageModel;
   size?: string;
+  quality?: ImageQuality;
   created_at: string;
   updated_at: string;
   data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
@@ -292,7 +294,7 @@ export async function updateAccount(
   });
 }
 
-export async function generateImage(prompt: string, model?: ImageModel, size?: string) {
+export async function generateImage(prompt: string, model?: ImageModel, size?: string, quality?: ImageQuality) {
   return httpRequest<ImageResponse>(
     "/v1/images/generations",
     {
@@ -301,6 +303,7 @@ export async function generateImage(prompt: string, model?: ImageModel, size?: s
         prompt,
         ...(model ? { model } : {}),
         ...(size ? { size } : {}),
+        ...(quality ? { quality } : {}),
         n: 1,
         response_format: "b64_json",
       },
@@ -308,7 +311,13 @@ export async function generateImage(prompt: string, model?: ImageModel, size?: s
   );
 }
 
-export async function editImage(files: File | File[], prompt: string, model?: ImageModel, size?: string) {
+export async function editImage(
+  files: File | File[],
+  prompt: string,
+  model?: ImageModel,
+  size?: string,
+  quality?: ImageQuality,
+) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
 
@@ -322,6 +331,9 @@ export async function editImage(files: File | File[], prompt: string, model?: Im
   if (size) {
     formData.append("size", size);
   }
+  if (quality) {
+    formData.append("quality", quality);
+  }
   formData.append("n", "1");
 
   return httpRequest<ImageResponse>(
@@ -333,7 +345,13 @@ export async function editImage(files: File | File[], prompt: string, model?: Im
   );
 }
 
-export async function createImageGenerationTask(clientTaskId: string, prompt: string, model?: ImageModel, size?: string) {
+export async function createImageGenerationTask(
+  clientTaskId: string,
+  prompt: string,
+  model?: ImageModel,
+  size?: string,
+  quality?: ImageQuality,
+) {
   return httpRequest<ImageTask>("/api/image-tasks/generations", {
     method: "POST",
     body: {
@@ -341,6 +359,7 @@ export async function createImageGenerationTask(clientTaskId: string, prompt: st
       prompt,
       ...(model ? { model } : {}),
       ...(size ? { size } : {}),
+      ...(quality ? { quality } : {}),
     },
   });
 }
@@ -351,6 +370,7 @@ export async function createImageEditTask(
   prompt: string,
   model?: ImageModel,
   size?: string,
+  quality?: ImageQuality,
 ) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
@@ -365,6 +385,9 @@ export async function createImageEditTask(
   }
   if (size) {
     formData.append("size", size);
+  }
+  if (quality) {
+    formData.append("quality", quality);
   }
 
   return httpRequest<ImageTask>("/api/image-tasks/edits", {

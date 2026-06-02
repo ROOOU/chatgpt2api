@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import api.image_tasks as image_tasks_module
+from services.config import config
 
 
 AUTH_HEADERS = {"Authorization": "Bearer chatgpt2api"}
@@ -58,6 +59,9 @@ class FakeImageTaskService:
 
 class ImageTasksApiTests(unittest.TestCase):
     def setUp(self):
+        self.old_auth_key = config.data.get("auth-key")
+        config.data["auth-key"] = "chatgpt2api"
+        self.addCleanup(self._restore_auth_key)
         self.fake_service = FakeImageTaskService()
         self.service_patcher = mock.patch.object(image_tasks_module, "image_task_service", self.fake_service)
         self.service_patcher.start()
@@ -66,11 +70,17 @@ class ImageTasksApiTests(unittest.TestCase):
         app.include_router(image_tasks_module.create_router())
         self.client = TestClient(app)
 
+    def _restore_auth_key(self):
+        if self.old_auth_key is None:
+            config.data.pop("auth-key", None)
+        else:
+            config.data["auth-key"] = self.old_auth_key
+
     def test_create_generation_task(self):
         response = self.client.post(
             "/api/image-tasks/generations",
             headers=AUTH_HEADERS,
-            json={"client_task_id": "task-1", "prompt": "cat", "model": "gpt-image-2"},
+            json={"client_task_id": "task-1", "prompt": "cat", "model": "gpt-image-2", "quality": "low"},
         )
 
         self.assertEqual(response.status_code, 200, response.text)
@@ -78,12 +88,13 @@ class ImageTasksApiTests(unittest.TestCase):
         self.assertEqual(payload["id"], "task-1")
         self.assertEqual(payload["status"], "success")
         self.assertEqual(len(self.fake_service.generation_calls), 1)
+        self.assertEqual(self.fake_service.generation_calls[0][1]["quality"], "low")
 
     def test_create_edit_task_accepts_multiple_images(self):
         response = self.client.post(
             "/api/image-tasks/edits",
             headers=AUTH_HEADERS,
-            data={"client_task_id": "edit-1", "prompt": "edit", "model": "gpt-image-2"},
+            data={"client_task_id": "edit-1", "prompt": "edit", "model": "gpt-image-2", "quality": "high"},
             files=[
                 ("image", ("one.png", b"one", "image/png")),
                 ("image", ("two.png", b"two", "image/png")),
@@ -93,6 +104,7 @@ class ImageTasksApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["id"], "edit-1")
         self.assertEqual(len(self.fake_service.edit_calls), 1)
+        self.assertEqual(self.fake_service.edit_calls[0][1]["quality"], "high")
         images = self.fake_service.edit_calls[0][1]["images"]
         self.assertEqual(len(images), 2)
 

@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: onlybas-chatgpt2api
+    runtime: docker
+    region: singapore
+    plan: starter
+    branch: main
+    healthCheckPath: /ping
+    autoDeployTrigger: commit
+    disk:
+      name: chatgpt2api-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: STORAGE_BACKEND
+        value: sqlite
+      - key: DATABASE_URL
+        value: sqlite:////app/data/accounts.db
+      - key: CHATGPT2API_DATA_DIR
+        value: /app/data
+      - key: CHATGPT2API_CONFIG_FILE
+        value: /app/data/config.json
+      - key: CHATGPT2API_BASE_URL
+        value: https://img.onlybas.com
+      - key: CHATGPT2API_DEFAULT_TEXT_MODEL
+        value: gpt-5-5
+      - key: CHATGPT2API_IMAGE_MODEL_SLUG
+        value: gpt-5-5-thinking
+      - key: CHATGPT2API_IMAGE_THINKING_EFFORT
+        value: low
+      - key: CHATGPT2API_AUTH_KEY
+        sync: false
+
+  - type: cron
+    name: onlybas-chatgpt2api-keepalive
+    runtime: docker
+    region: singapore
+    schedule: "*/12 * * * *"
+    dockerCommand: python -c "import os, urllib.request; urllib.request.urlopen(os.environ['PING_URL'], timeout=15).read()"
+    envVars:
+      - key: PING_URL
+        value: https://onlybas-chatgpt2api.onrender.com/ping

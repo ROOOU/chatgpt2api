@@ -221,6 +221,7 @@ class ConversationRequest:
     images: list[str] | None = None
     n: int = 1
     size: str | None = None
+    quality: str | None = None
     response_format: str = "b64_json"
     base_url: str | None = None
     message_as_error: bool = False
@@ -374,7 +375,14 @@ def is_image_tool_event(event: dict[str, Any]) -> bool:
         return False
     metadata = message.get("metadata") or {}
     author = message.get("author") or {}
-    return author.get("role") == "tool" and metadata.get("async_task_type") == "image_gen"
+    if author.get("role") != "tool":
+        return False
+    if metadata.get("async_task_type") == "image_gen":
+        return True
+    content = message.get("content") or {}
+    if content.get("content_type") != "multimodal_text":
+        return False
+    return "sediment://" in json.dumps(content) or "file-service://" in json.dumps(content)
 
 
 def update_conversation_state(state: ConversationState, payload: str, event: dict[str, Any] | None = None) -> None:
@@ -458,6 +466,7 @@ def conversation_events(
     prompt: str = "",
     images: list[str] | None = None,
     size: str | None = None,
+    quality: str | None = None,
 ) -> Iterator[dict[str, Any]]:
     normalized = normalize_messages(messages or ([{"role": "user", "content": prompt}] if prompt else []))
     image_model = str(model or "").strip() in IMAGE_MODELS
@@ -470,6 +479,7 @@ def conversation_events(
         prompt=final_prompt,
         images=images if image_model else None,
         system_hints=["picture_v2"] if image_model else None,
+        image_quality=quality if image_model else None,
     )
     yield from iter_conversation_payloads(payloads, history_text, history_messages)
 
@@ -525,6 +535,7 @@ def stream_image_outputs(
             model=request.model,
             images=request.images or [],
             size=request.size,
+            quality=request.quality,
     ):
         last = event
         if event.get("type") == "conversation.delta":
@@ -552,7 +563,7 @@ def stream_image_outputs(
     file_ids = [str(item) for item in last.get("file_ids") or []]
     sediment_ids = [str(item) for item in last.get("sediment_ids") or []]
     message = str(last.get("text") or "").strip()
-    is_text_response = last.get("tool_invoked") is False or last.get("turn_use_case") == "text"
+    is_text_response = last.get("turn_use_case") == "text"
     logger.info({
         "event": "image_stream_resolve_start",
         "conversation_id": conversation_id,

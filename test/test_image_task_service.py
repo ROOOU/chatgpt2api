@@ -68,6 +68,28 @@ class ImageTaskServiceTests(unittest.TestCase):
             self.assertEqual(task["data"][0]["url"], "http://example.test/image.png")
             self.assertEqual(calls, 1)
 
+    def test_generation_task_preserves_quality(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            captured = {}
+
+            def handler(payload):
+                captured["quality"] = payload.get("quality")
+                return {"data": [{"url": "http://example.test/image.png"}]}
+
+            service = self.make_service(Path(tmp_dir) / "image_tasks.json", handler)
+            submitted = service.submit_generation(
+                OWNER,
+                client_task_id="quality-task",
+                prompt="cat",
+                model="gpt-image-2",
+                size=None,
+                base_url="http://local.test",
+                quality="low",
+            )
+            self.assertEqual(submitted["quality"], "low")
+            wait_for_task(service, OWNER, "quality-task", "success")
+            self.assertEqual(captured["quality"], "low")
+
     def test_different_owner_cannot_query_task(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = self.make_service(Path(tmp_dir) / "image_tasks.json")

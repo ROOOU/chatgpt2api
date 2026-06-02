@@ -58,6 +58,26 @@ class ConfigLoadingTests(unittest.TestCase):
                 else:
                     module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
 
+    def test_default_text_model_prefers_env_and_replaces_auto(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "config.json"
+            path.write_text(json.dumps({"auth-key": "test-auth", "default_text_model": "gpt-5"}), encoding="utf-8")
+            module = self.config_module
+            old_env_model = module.os.environ.get("CHATGPT2API_DEFAULT_TEXT_MODEL")
+            try:
+                module.os.environ["CHATGPT2API_DEFAULT_TEXT_MODEL"] = "gpt-5-5"
+                store = module.ConfigStore(path)
+
+                self.assertEqual(store.default_text_model, "gpt-5-5")
+                self.assertEqual(store.text_model_or_default(None), "gpt-5-5")
+                self.assertEqual(store.text_model_or_default("auto"), "gpt-5-5")
+                self.assertEqual(store.text_model_or_default("gpt-5-3"), "gpt-5-3")
+            finally:
+                if old_env_model is None:
+                    module.os.environ.pop("CHATGPT2API_DEFAULT_TEXT_MODEL", None)
+                else:
+                    module.os.environ["CHATGPT2API_DEFAULT_TEXT_MODEL"] = old_env_model
+
 
 if __name__ == "__main__":
     unittest.main()

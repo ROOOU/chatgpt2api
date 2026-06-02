@@ -22,6 +22,7 @@ class ImageGenerationRequest(BaseModel):
     model: str = "gpt-image-2"
     n: int = Field(default=1, ge=1, le=4)
     size: str | None = None
+    quality: str | None = None
     response_format: str = "b64_json"
     history_disabled: bool = True
     stream: bool | None = None
@@ -96,6 +97,7 @@ def create_router() -> APIRouter:
             model: str = Form(default="gpt-image-2"),
             n: int = Form(default=1),
             size: str | None = Form(default=None),
+            quality: str | None = Form(default=None),
             response_format: str = Form(default="b64_json"),
             stream: bool | None = Form(default=None),
     ):
@@ -119,6 +121,7 @@ def create_router() -> APIRouter:
             "model": model,
             "n": n,
             "size": size,
+            "quality": quality,
             "response_format": response_format,
             "stream": stream,
             "base_url": resolve_image_base_url(request),

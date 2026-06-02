@@ -10,5 +10,9 @@ __pycache__
 web/.next
 web/node_modules
 
+config.json
+config.json.bak*
+data
+
 assets
 README.md

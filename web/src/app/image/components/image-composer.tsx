@@ -12,6 +12,7 @@ type ImageComposerProps = {
   prompt: string;
   imageCount: string;
   imageSize: string;
+  imageQuality: string;
   availableQuota: string;
   activeTaskCount: number;
   referenceImages: Array<{ name: string; dataUrl: string }>;
@@ -20,6 +21,7 @@ type ImageComposerProps = {
   onPromptChange: (value: string) => void;
   onImageCountChange: (value: string) => void;
   onImageSizeChange: (value: string) => void;
+  onImageQualityChange: (value: string) => void;
   onSubmit: () => void | Promise<void>;
   onPickReferenceImage: () => void;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
@@ -30,6 +32,7 @@ export function ImageComposer({
   prompt,
   imageCount,
   imageSize,
+  imageQuality,
   availableQuota,
   activeTaskCount,
   referenceImages,
@@ -38,6 +41,7 @@ export function ImageComposer({
   onPromptChange,
   onImageCountChange,
   onImageSizeChange,
+  onImageQualityChange,
   onSubmit,
   onPickReferenceImage,
   onReferenceImageChange,
@@ -60,6 +64,11 @@ export function ImageComposer({
     { value: "4:3", label: "4:3 (横版)" },
     { value: "3:4", label: "3:4 (竖版)" },
     { value: "9:16", label: "9:16 (竖版)" },
+  ];
+  const imageQualityOptions = [
+    { value: "low", label: "低质量" },
+    { value: "medium", label: "标准" },
+    { value: "high", label: "高质量" },
   ];
   const imageSizeLabel = imageSizeOptions.find((option) => option.value === imageSize)?.label || "未指定";
 
@@ -259,6 +268,21 @@ export function ImageComposer({
                       </div>
                     ) : null}
                   </div>
+                  <div className="flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-stone-200 bg-white px-2 py-0.5 sm:h-auto sm:gap-2 sm:px-3 sm:py-1">
+                    <span className="hidden text-[11px] font-medium text-stone-700 sm:inline sm:text-sm">画质</span>
+                    <select
+                      value={imageQuality}
+                      onChange={(event) => onImageQualityChange(event.target.value)}
+                      className="h-7 w-[74px] appearance-none bg-transparent text-center text-xs font-bold text-stone-700 outline-none sm:h-8 sm:w-[88px] sm:text-sm"
+                      aria-label="选择图片画质"
+                    >
+                      {imageQualityOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
                 </div>
 
@@ -279,4 +303,3 @@ export function ImageComposer({
     </div>
   );
 }
-

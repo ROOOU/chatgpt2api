@@ -7,6 +7,7 @@ from typing import Any, Iterable, Iterator
 
 from fastapi import HTTPException
 
+from services.config import config
 from services.protocol.conversation import (
     ConversationRequest,
     ImageOutput,
@@ -132,7 +133,7 @@ def response_completed(response_id: str, model: str, created: int, output: list[
 
 
 def stream_text_response(backend, body: dict[str, Any]) -> Iterator[dict[str, Any]]:
-    model = str(body.get("model") or "auto").strip() or "auto"
+    model = config.text_model_or_default(body.get("model"))
     messages = messages_from_input(body.get("input"), body.get("instructions"))
     response_id = f"resp_{uuid.uuid4().hex}"
     item_id = f"msg_{uuid.uuid4().hex}"

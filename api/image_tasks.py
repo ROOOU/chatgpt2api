@@ -15,6 +15,7 @@ class ImageGenerationTaskRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
     model: str = "gpt-image-2"
     size: str | None = None
+    quality: str | None = None
 
 
 def _parse_task_ids(value: str) -> list[str]:
@@ -56,6 +57,7 @@ def create_router() -> APIRouter:
                 prompt=body.prompt,
                 model=body.model,
                 size=body.size,
+                quality=body.quality,
                 base_url=resolve_image_base_url(request),
             )
         except ValueError as exc:
@@ -71,6 +73,7 @@ def create_router() -> APIRouter:
         prompt: str = Form(...),
         model: str = Form(default="gpt-image-2"),
         size: str | None = Form(default=None),
+        quality: str | None = Form(default=None),
     ):
         identity = require_identity(authorization)
         await filter_or_log(LoggedCall(identity, "/api/image-tasks/edits", model, "图生图任务", request_text=prompt), prompt)
@@ -91,6 +94,7 @@ def create_router() -> APIRouter:
                 prompt=prompt,
                 model=model,
                 size=size,
+                quality=quality,
                 base_url=resolve_image_base_url(request),
                 images=images,
             )

@@ -10,8 +10,8 @@ import time
 from services.storage.base import StorageBackend
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = BASE_DIR / "data"
-CONFIG_FILE = BASE_DIR / "config.json"
+DATA_DIR = Path(os.getenv("CHATGPT2API_DATA_DIR") or BASE_DIR / "data")
+CONFIG_FILE = Path(os.getenv("CHATGPT2API_CONFIG_FILE") or BASE_DIR / "config.json")
 VERSION_FILE = BASE_DIR / "VERSION"
 BACKUP_STATE_FILE = DATA_DIR / "backup_state.json"
 
@@ -231,6 +231,20 @@ class ConfigStore:
         return str(self.data.get("global_system_prompt") or "").strip()
 
     @property
+    def default_text_model(self) -> str:
+        return str(
+            os.getenv("CHATGPT2API_DEFAULT_TEXT_MODEL")
+            or self.data.get("default_text_model")
+            or "auto"
+        ).strip() or "auto"
+
+    def text_model_or_default(self, value: object) -> str:
+        model = str(value or "").strip()
+        if not model or model == "auto":
+            return self.default_text_model
+        return model
+
+    @property
     def images_dir(self) -> Path:
         path = DATA_DIR / "images"
         path.mkdir(parents=True, exist_ok=True)
@@ -284,6 +298,7 @@ class ConfigStore:
         data["sensitive_words"] = self.sensitive_words
         data["ai_review"] = self.ai_review
         data["global_system_prompt"] = self.global_system_prompt
+        data["default_text_model"] = self.default_text_model
         data["backup"] = self.get_backup_settings()
         data.pop("auth-key", None)
         return data

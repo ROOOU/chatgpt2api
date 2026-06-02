@@ -6,6 +6,7 @@ from typing import Any, Iterable, Iterator
 
 from fastapi import HTTPException
 
+from services.config import config
 from services.protocol.conversation import (
     ConversationRequest,
     ImageOutput,
@@ -109,7 +110,7 @@ def chat_image_args(body: dict[str, Any]) -> tuple[str, str, int, list[tuple[byt
 
 
 def text_chat_parts(body: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
-    model = str(body.get("model") or "auto").strip() or "auto"
+    model = config.text_model_or_default(body.get("model"))
     messages = normalize_messages(chat_messages_from_body(body))
     return model, messages
 
