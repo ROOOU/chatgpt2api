@@ -17,7 +17,7 @@ class AccountModel(Base):
     __tablename__ = "accounts"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    access_token = Column(String(2048), unique=True, nullable=False, index=True)
+    access_token = Column(Text, unique=True, nullable=False, index=True)
     data = Column(Text, nullable=False)  # JSON 格式存储完整账号数据
 
 
@@ -41,7 +41,15 @@ class DatabaseStorageBackend(StorageBackend):
             pool_recycle=3600,   # 1小时回收连接
         )
         Base.metadata.create_all(self.engine)
+        self._ensure_schema()
         self.Session = sessionmaker(bind=self.engine)
+
+    def _ensure_schema(self) -> None:
+        """Apply lightweight schema fixes that create_all cannot apply to existing tables."""
+        if self.engine.dialect.name != "postgresql":
+            return
+        with self.engine.begin() as connection:
+            connection.execute(text("ALTER TABLE accounts ALTER COLUMN access_token TYPE TEXT"))
 
     def load_accounts(self) -> list[dict[str, Any]]:
         """从数据库加载账号数据"""
