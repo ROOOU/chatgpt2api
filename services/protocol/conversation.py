@@ -642,8 +642,10 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
                 account_service.mark_image_result(token, False)
                 last_error = str(exc)
                 logger.warning({"event": "image_stream_fail", "request_token": token, "error": last_error})
-                if not emitted_for_token and is_token_invalid_error(last_error):
+                if is_token_invalid_error(last_error):
                     account_service.remove_invalid_token(token, "image_stream")
+                    if emitted_for_token:
+                        emitted = False
                     continue
                 raise ImageGenerationError(image_stream_error_message(last_error)) from exc
 
