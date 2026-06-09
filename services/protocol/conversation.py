@@ -820,12 +820,15 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
                     "account_email": account_email,
                     "error": last_error,
                 })
-                if not emitted_for_token and is_token_invalid_error(last_error):
+                if is_token_invalid_error(last_error):
                     refreshed_token = account_service.refresh_access_token(token, force=True, event="image_stream")
                     if refreshed_token and refreshed_token != token:
-                        token = refreshed_token
+                        if emitted_for_token:
+                            emitted = False
                         continue
                     account_service.remove_invalid_token(token, "image_stream")
+                    if emitted_for_token:
+                        emitted = False
                     continue
                 raise ImageGenerationError(image_stream_error_message(last_error), account_email=account_email) from exc
 
